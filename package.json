@@ -1,0 +1,58 @@
+{
+  "name": "react-native-blurred-video",
+  "version": "0.1.0",
+  "description": "Native GPU-blurred video view for React Native via Nitro Modules",
+  "main": "lib/commonjs/index.js",
+  "module": "lib/module/index.js",
+  "types": "lib/typescript/src/index.d.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": [
+    "src",
+    "lib",
+    "ios",
+    "android",
+    "cpp",
+    "nitrogen",
+    "nitro.json",
+    "react-native-blurred-video.podspec",
+    "!**/.DS_Store"
+  ],
+  "scripts": {
+    "nitrogen": "nitro-codegen",
+    "typecheck": "tsc --noEmit",
+    "prepare": "bob build"
+  },
+  "keywords": [
+    "react-native",
+    "nitro",
+    "video",
+    "blur",
+    "avplayer",
+    "exoplayer"
+  ],
+  "repository": "https://github.com/yourname/react-native-blurred-video",
+  "author": "You",
+  "license": "MIT",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*",
+    "react-native-nitro-modules": "*"
+  },
+  "devDependencies": {
+    "nitro-codegen": "^0.25.0",
+    "react-native-nitro-modules": "^0.25.0",
+    "react-native-builder-bob": "^0.30.0",
+    "typescript": "^5.4.0",
+    "@types/react": "^19.2.0"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      "commonjs",
+      "module",
+      ["typescript", { "project": "tsconfig.build.json" }]
+    ]
+  }
+}

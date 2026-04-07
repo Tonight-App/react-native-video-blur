@@ -1,0 +1,11 @@
+node_modules/
+lib/
+.claude/
+nitrogen/generated/
+.DS_Store
+*.log
+ios/Pods/
+ios/build/
+android/.gradle/
+android/build/
+android/local.properties

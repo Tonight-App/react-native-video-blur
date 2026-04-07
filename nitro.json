@@ -1,0 +1,17 @@
+{
+  "cxxNamespace": ["blurredvideo"],
+  "ios": {
+    "iosModuleName": "BlurredVideo"
+  },
+  "android": {
+    "androidNamespace": ["blurredvideo"],
+    "androidCxxLibName": "BlurredVideo"
+  },
+  "autolinking": {
+    "BlurredVideoView": {
+      "swift": "HybridBlurredVideoView",
+      "kotlin": "HybridBlurredVideoView"
+    }
+  },
+  "ignorePaths": ["node_modules"]
+}
