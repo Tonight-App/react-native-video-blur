@@ -45,6 +45,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     // MARK: - Init
 
     init() {
+        super.init()
         containerView.clipsToBounds = true
         containerView.backgroundColor = .black
         containerView.addSubview(thumbnailView)
