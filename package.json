@@ -1,6 +1,6 @@
 {
   "name": "react-native-blurred-video",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Native GPU-blurred video view for React Native via Nitro Modules",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",

@@ -4,6 +4,8 @@ package = JSON.parse(File.read(File.join(__dir__, "package.json")))
 
 Pod::Spec.new do |s|
   s.name         = "react-native-blurred-video"
+  s.module_name  = "BlurredVideo"
+  s.header_dir   = "BlurredVideo"
   s.version      = package["version"]
   s.summary      = package["description"]
   s.homepage     = package["repository"]
