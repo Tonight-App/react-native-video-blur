@@ -44,7 +44,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
 
     // MARK: - Init
 
-    init() {
+    override init() {
         super.init()
         containerView.clipsToBounds = true
         containerView.backgroundColor = .black
