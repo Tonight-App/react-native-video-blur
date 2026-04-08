@@ -7,13 +7,14 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     // MARK: - View
 
     private let containerView = UIView()
-    override var view: UIView { containerView }
+    var view: UIView { containerView }
 
     // MARK: - Native layers
 
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
     private var looperRef: Any?
+    private var statusObservation: NSKeyValueObservation?
     private let blurOverlay = UIVisualEffectView(
         effect: UIBlurEffect(style: .dark)
     )
@@ -43,20 +44,16 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
 
     // MARK: - Init
 
-    override init() {
-        super.init()
+    init() {
         containerView.clipsToBounds = true
         containerView.backgroundColor = .black
         containerView.addSubview(thumbnailView)
         blurOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     }
 
-    override func beforeUpdate() {
-        super.beforeUpdate()
-    }
+    func beforeUpdate() {}
 
-    override func afterUpdate() {
-        super.afterUpdate()
+    func afterUpdate() {
         let bounds = containerView.bounds
         playerLayer?.frame = bounds
         blurOverlay.frame = bounds
@@ -66,6 +63,8 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     // MARK: - Video loading
 
     private func loadVideo() {
+        statusObservation?.invalidate()
+        statusObservation = nil
         player?.pause()
         playerLayer?.removeFromSuperlayer()
         player = nil
@@ -102,32 +101,19 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         containerView.addSubview(blurOverlay)
         containerView.bringSubviewToFront(thumbnailView)
 
-        item.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-
-        if !paused {
-            player?.play()
-        }
-    }
-
-    override func observeValue(
-        forKeyPath keyPath: String?,
-        of object: Any?,
-        change: [NSKeyValueChangeKey: Any]?,
-        context: UnsafeMutableRawPointer?
-    ) {
-        if keyPath == "status",
-           let item = object as? AVPlayerItem,
-           item.status == .readyToPlay
-        {
-            item.removeObserver(self, forKeyPath: "status")
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard let self, item.status == .readyToPlay else { return }
+            DispatchQueue.main.async {
                 UIView.animate(withDuration: 0.3, delay: 0.15, options: .curveEaseOut) {
                     self.thumbnailView.alpha = 0
                 } completion: { _ in
                     self.thumbnailView.isHidden = true
                 }
             }
+        }
+
+        if !paused {
+            player?.play()
         }
     }
 
@@ -153,12 +139,11 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
 
     private func updateBlurIntensity() {
         // UIVisualEffectView gives zero-flicker GPU blur. For custom radius,
-        // swap for a CIGaussianBlur CAFilter on playerLayer.
-        // playerLayer?.filters = [CIFilter(name: "CIGaussianBlur",
-        //     parameters: ["inputRadius": blurRadius])!]
+        // render through AVPlayerItemVideoOutput + CIGaussianBlur + MTKView.
     }
 
     deinit {
+        statusObservation?.invalidate()
         player?.pause()
         playerLayer?.removeFromSuperlayer()
     }
