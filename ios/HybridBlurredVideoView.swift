@@ -15,9 +15,8 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     private var playerLayer: AVPlayerLayer?
     private var looperRef: Any?
     private var statusObservation: NSKeyValueObservation?
-    private let blurOverlay = UIVisualEffectView(
-        effect: UIBlurEffect(style: .dark)
-    )
+    private let blurOverlay = UIVisualEffectView(effect: nil)
+    private var blurAnimator: UIViewPropertyAnimator?
     private let thumbnailView: UIImageView = {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
@@ -35,7 +34,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     }
     var looping: Bool = false
     var blurRadius: Double = 7.0 {
-        didSet { updateBlurIntensity() }
+        didSet { applyBlurFraction() }
     }
     var thumbnailSource: String = "" {
         didSet { loadThumbnail() }
@@ -100,6 +99,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         self.playerLayer = layer
 
         containerView.addSubview(blurOverlay)
+        setupBlurAnimator()
         containerView.bringSubviewToFront(thumbnailView)
 
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -121,12 +121,14 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     // MARK: - Thumbnail
 
     private func loadThumbnail() {
-        thumbnailView.alpha = 1
-        thumbnailView.isHidden = false
-
         guard !thumbnailSource.isEmpty, let url = URL(string: thumbnailSource) else {
+            thumbnailView.image = nil
+            thumbnailView.isHidden = true
             return
         }
+
+        thumbnailView.alpha = 1
+        thumbnailView.isHidden = false
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data, let image = UIImage(data: data) else { return }
@@ -138,12 +140,30 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
 
     // MARK: - Blur intensity
 
-    private func updateBlurIntensity() {
-        // UIVisualEffectView gives zero-flicker GPU blur. For custom radius,
-        // render through AVPlayerItemVideoOutput + CIGaussianBlur + MTKView.
+    private func setupBlurAnimator() {
+        blurAnimator?.stopAnimation(true)
+        blurAnimator?.finishAnimation(at: .start)
+
+        blurOverlay.effect = nil
+        let animator = UIViewPropertyAnimator(duration: 1, curve: .linear) { [weak self] in
+            self?.blurOverlay.effect = UIBlurEffect(style: .light)
+        }
+        animator.pausesOnCompletion = true
+        animator.fractionComplete = CGFloat(min(max(blurRadius / 10.0, 0), 1))
+        blurAnimator = animator
+    }
+
+    private func applyBlurFraction() {
+        if blurAnimator == nil {
+            setupBlurAnimator()
+        } else {
+            blurAnimator?.fractionComplete = CGFloat(min(max(blurRadius / 10.0, 0), 1))
+        }
     }
 
     deinit {
+        blurAnimator?.stopAnimation(true)
+        blurAnimator?.finishAnimation(at: .start)
         statusObservation?.invalidate()
         player?.pause()
         playerLayer?.removeFromSuperlayer()
