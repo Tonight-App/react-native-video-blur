@@ -1,5 +1,6 @@
 package com.margelo.nitro.blurredvideo
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Color
 import android.graphics.RenderEffect
@@ -8,9 +9,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.media3.common.MediaItem
@@ -34,7 +36,7 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     override val view: View get() = container
 
     private var player: ExoPlayer? = null
-    private var surfaceView: SurfaceView? = null
+    private var textureView: TextureView? = null
 
     private val thumbnailView = ImageView(context).apply {
         scaleType = ImageView.ScaleType.CENTER_CROP
@@ -48,6 +50,10 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     private var loadedSource: String? = null
     private var extractedSource: String? = null
     private var extractionToken: UUID? = null
+
+    // Blur animation state
+    private var blurAnimator: ValueAnimator? = null
+    private var currentAppliedRadius: Float = 7f
 
     init {
         container.addView(thumbnailView)
@@ -79,7 +85,7 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     override var blurRadius: Double = 7.0
         set(value) {
             field = value
-            applyBlur()
+            animateBlurTo(value.toFloat())
         }
 
     override var thumbnailSource: String = ""
@@ -109,7 +115,7 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     override var rotation: Double = 0.0
         set(value) {
             field = value
-            surfaceView?.rotation = value.toFloat()
+            textureView?.rotation = value.toFloat()
         }
 
     private fun reconcile() {
@@ -131,8 +137,8 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     private fun unloadVideo() {
         player?.release()
         player = null
-        surfaceView?.let { container.removeView(it) }
-        surfaceView = null
+        textureView?.let { container.removeView(it) }
+        textureView = null
         loadedSource = null
         thumbnailView.alpha = 1f
         thumbnailView.visibility = View.VISIBLE
@@ -143,19 +149,20 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         if (source.isEmpty()) return
         loadedSource = source
 
-        val sv = SurfaceView(context).apply {
+        val tv = TextureView(context).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            isOpaque = false
         }
-        container.addView(sv, 0)
-        surfaceView = sv
+        container.addView(tv, 0)
+        textureView = tv
 
-        if (rotation == 90.0) sv.rotation = 90f
+        if (rotation == 90.0) tv.rotation = 90f
 
         val exo = ExoPlayer.Builder(context).build().apply {
-            setVideoSurfaceView(sv)
+            setVideoTextureView(tv)
             repeatMode =
                 if (looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
             volume = 0f
@@ -175,20 +182,45 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         })
 
         player = exo
-        applyBlur()
+        applyBlurInternal(currentAppliedRadius)
 
         if (!paused) exo.play()
     }
 
-    private fun applyBlur() {
+    private fun animateBlurTo(target: Float) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { animateBlurTo(target) }
+            return
+        }
+        blurAnimator?.cancel()
+        val start = currentAppliedRadius
+        if (start == target) {
+            applyBlurInternal(target)
+            return
+        }
+        blurAnimator = ValueAnimator.ofFloat(start, target).apply {
+            duration = 1000
+            interpolator = LinearInterpolator()
+            addUpdateListener { anim ->
+                val r = anim.animatedValue as Float
+                currentAppliedRadius = r
+                applyBlurInternal(r)
+            }
+            start()
+        }
+    }
+
+    private fun applyBlurInternal(radius: Float) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { applyBlurInternal(radius) }
+            return
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val effect = RenderEffect.createBlurEffect(
-            blurRadius.toFloat(),
-            blurRadius.toFloat(),
-            Shader.TileMode.CLAMP
-        )
-        surfaceView?.setRenderEffect(effect)
-        thumbnailView.setRenderEffect(effect)
+        val effect = if (radius > 0f) {
+            RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
+        } else null
+        // Apply once on the container — blurs video + thumbnail together in a single pass.
+        container.setRenderEffect(effect)
     }
 
     private fun loadRemoteThumbnail() {
@@ -199,7 +231,6 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
             thumbnailView.visibility = View.VISIBLE
         }
         thumbnailView.load(thumbnailSource)
-        applyBlur()
     }
 
     private fun extractThumbnailFromSource() {
@@ -209,7 +240,6 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         // Cache hit → paint synchronously, no flicker.
         VideoThumbnailExtractor.cachedBitmap(context, src, 100, 512)?.let {
             thumbnailView.setImageBitmap(it)
-            applyBlur()
             return
         }
 
@@ -231,12 +261,13 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
                 if (extractionToken != token) return@post
                 if (thumbnailView.visibility == View.GONE) return@post
                 thumbnailView.setImageBitmap(bmp)
-                applyBlur()
             }
         }
     }
 
     override fun dispose() {
+        blurAnimator?.cancel()
+        blurAnimator = null
         player?.release()
         player = null
         super.dispose()
