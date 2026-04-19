@@ -7,6 +7,12 @@ import com.facebook.react.uimanager.ViewManager
 import com.margelo.nitro.blurredvideo.views.HybridBlurredVideoViewManager
 
 class BlurredVideoPackage : ReactPackage {
+    init {
+        // Loads libBlurredVideo.so, which registers all HybridObjects
+        // (VideoThumbnailGenerator, BlurredVideoView) in the Nitro registry.
+        BlurredVideoOnLoad.initializeNative()
+    }
+
     override fun createNativeModules(
         reactContext: ReactApplicationContext
     ): List<NativeModule> = emptyList()
