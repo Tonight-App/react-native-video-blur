@@ -6,6 +6,8 @@ import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
@@ -17,6 +19,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import coil.load
 import com.margelo.nitro.NitroModules
 import com.margelo.nitro.blurredvideo.HybridBlurredVideoViewSpec
+import java.util.UUID
+import java.util.concurrent.Executors
 
 class HybridBlurredVideoView : HybridBlurredVideoViewSpec() {
 
@@ -43,6 +47,11 @@ class HybridBlurredVideoView : HybridBlurredVideoViewSpec() {
         )
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var loadedSource: String? = null
+    private var extractedSource: String? = null
+    private var extractionToken: UUID? = null
+
     init {
         container.addView(thumbnailView)
     }
@@ -53,7 +62,7 @@ class HybridBlurredVideoView : HybridBlurredVideoViewSpec() {
         set(value) {
             if (field != value) {
                 field = value
-                loadVideo()
+                reconcile()
             }
         }
 
@@ -78,8 +87,26 @@ class HybridBlurredVideoView : HybridBlurredVideoViewSpec() {
 
     override var thumbnailSource: String = ""
         set(value) {
-            field = value
-            loadThumbnail()
+            if (field != value) {
+                field = value
+                loadRemoteThumbnail()
+            }
+        }
+
+    override var enableThumbnail: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                reconcile()
+            }
+        }
+
+    override var showVideo: Boolean = true
+        set(value) {
+            if (field != value) {
+                field = value
+                reconcile()
+            }
         }
 
     override var rotation: Double = 0.0
@@ -88,13 +115,36 @@ class HybridBlurredVideoView : HybridBlurredVideoViewSpec() {
             surfaceView?.rotation = value.toFloat()
         }
 
-    private fun loadVideo() {
+    private fun reconcile() {
+        if (showVideo) {
+            if (loadedSource != source) loadVideo()
+        } else {
+            unloadVideo()
+        }
+
+        if (enableThumbnail
+            && thumbnailSource.isEmpty()
+            && source.isNotEmpty()
+            && extractedSource != source
+        ) {
+            extractThumbnailFromSource()
+        }
+    }
+
+    private fun unloadVideo() {
         player?.release()
         player = null
         surfaceView?.let { container.removeView(it) }
         surfaceView = null
+        loadedSource = null
+        thumbnailView.alpha = 1f
+        thumbnailView.visibility = View.VISIBLE
+    }
 
+    private fun loadVideo() {
+        unloadVideo()
         if (source.isEmpty()) return
+        loadedSource = source
 
         val sv = SurfaceView(context).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -134,28 +184,68 @@ class HybridBlurredVideoView : HybridBlurredVideoViewSpec() {
     }
 
     private fun applyBlur() {
-        val sv = surfaceView ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            sv.setRenderEffect(
-                RenderEffect.createBlurEffect(
-                    blurRadius.toFloat(),
-                    blurRadius.toFloat(),
-                    Shader.TileMode.CLAMP
-                )
-            )
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val effect = RenderEffect.createBlurEffect(
+            blurRadius.toFloat(),
+            blurRadius.toFloat(),
+            Shader.TileMode.CLAMP
+        )
+        surfaceView?.setRenderEffect(effect)
+        thumbnailView.setRenderEffect(effect)
     }
 
-    private fun loadThumbnail() {
+    private fun loadRemoteThumbnail() {
         if (thumbnailSource.isEmpty()) return
-        thumbnailView.alpha = 1f
-        thumbnailView.visibility = View.VISIBLE
+        val videoAlreadyRendered = thumbnailView.visibility == View.GONE
+        if (!videoAlreadyRendered) {
+            thumbnailView.alpha = 1f
+            thumbnailView.visibility = View.VISIBLE
+        }
         thumbnailView.load(thumbnailSource)
+        applyBlur()
+    }
+
+    private fun extractThumbnailFromSource() {
+        val src = source
+        extractedSource = src
+
+        // Cache hit → paint synchronously, no flicker.
+        VideoThumbnailExtractor.cachedBitmap(context, src, 100, 512)?.let {
+            thumbnailView.setImageBitmap(it)
+            applyBlur()
+            return
+        }
+
+        val videoAlreadyRendered = thumbnailView.visibility == View.GONE
+        if (!videoAlreadyRendered) {
+            thumbnailView.alpha = 1f
+            thumbnailView.visibility = View.VISIBLE
+        }
+
+        val token = UUID.randomUUID()
+        extractionToken = token
+        extractorExecutor.execute {
+            val bmp = try {
+                VideoThumbnailExtractor.extract(context, src, 100, 512)
+            } catch (_: Throwable) {
+                return@execute
+            }
+            mainHandler.post {
+                if (extractionToken != token) return@post
+                if (thumbnailView.visibility == View.GONE) return@post
+                thumbnailView.setImageBitmap(bmp)
+                applyBlur()
+            }
+        }
     }
 
     override fun dispose() {
         player?.release()
         player = null
         super.dispose()
+    }
+
+    companion object {
+        private val extractorExecutor = Executors.newSingleThreadExecutor()
     }
 }

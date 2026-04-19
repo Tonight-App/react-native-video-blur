@@ -24,10 +24,14 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         return iv
     }()
 
+    private var loadedSource: String?
+    private var extractedSource: String?
+    private var extractionToken: UUID?
+
     // MARK: - Props
 
     var source: String = "" {
-        didSet { if source != oldValue { loadVideo() } }
+        didSet { if source != oldValue { reconcile() } }
     }
     var paused: Bool = true {
         didSet { paused ? player?.pause() : player?.play() }
@@ -37,7 +41,13 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         didSet { applyBlurFraction() }
     }
     var thumbnailSource: String = "" {
-        didSet { loadThumbnail() }
+        didSet { if thumbnailSource != oldValue { loadRemoteThumbnail() } }
+    }
+    var enableThumbnail: Bool = false {
+        didSet { if enableThumbnail != oldValue { reconcile() } }
+    }
+    var showVideo: Bool = true {
+        didSet { if showVideo != oldValue { reconcile() } }
     }
     var rotation: Double = 0
 
@@ -48,7 +58,9 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         containerView.clipsToBounds = true
         containerView.backgroundColor = .black
         containerView.addSubview(thumbnailView)
+        containerView.addSubview(blurOverlay)
         blurOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        setupBlurAnimator()
     }
 
     func beforeUpdate() {}
@@ -60,9 +72,26 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         thumbnailView.frame = bounds
     }
 
+    // MARK: - Reconcile
+
+    private func reconcile() {
+        if showVideo {
+            if loadedSource != source { loadVideo() }
+        } else {
+            unloadVideo()
+        }
+
+        if enableThumbnail
+            && thumbnailSource.isEmpty
+            && !source.isEmpty
+            && extractedSource != source {
+            extractThumbnailFromSource()
+        }
+    }
+
     // MARK: - Video loading
 
-    private func loadVideo() {
+    private func unloadVideo() {
         statusObservation?.invalidate()
         statusObservation = nil
         player?.pause()
@@ -70,8 +99,16 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         player = nil
         playerLayer = nil
         looperRef = nil
+        loadedSource = nil
+        thumbnailView.alpha = 1
+        thumbnailView.isHidden = false
+    }
+
+    private func loadVideo() {
+        unloadVideo()
 
         guard !source.isEmpty, let url = URL(string: source) else { return }
+        loadedSource = source
 
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
@@ -95,12 +132,10 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
             layer.setAffineTransform(CGAffineTransform(rotationAngle: .pi / 2))
         }
 
-        containerView.layer.addSublayer(layer)
+        // Player layer goes below thumbnail + blur overlay so the thumbnail
+        // (and its blur) stay on top until we explicitly fade them out.
+        containerView.layer.insertSublayer(layer, at: 0)
         self.playerLayer = layer
-
-        containerView.addSubview(blurOverlay)
-        setupBlurAnimator()
-        containerView.bringSubviewToFront(thumbnailView)
 
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard let self, item.status == .readyToPlay else { return }
@@ -118,17 +153,18 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         }
     }
 
-    // MARK: - Thumbnail
+    // MARK: - Thumbnail (remote source)
 
-    private func loadThumbnail() {
+    private func loadRemoteThumbnail() {
         guard !thumbnailSource.isEmpty, let url = URL(string: thumbnailSource) else {
-            thumbnailView.image = nil
-            thumbnailView.isHidden = true
             return
         }
 
-        thumbnailView.alpha = 1
-        thumbnailView.isHidden = false
+        let videoAlreadyReady = player?.currentItem?.status == .readyToPlay
+        if !videoAlreadyReady {
+            thumbnailView.alpha = 1
+            thumbnailView.isHidden = false
+        }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data, let image = UIImage(data: data) else { return }
@@ -136,6 +172,47 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
                 self?.thumbnailView.image = image
             }
         }.resume()
+    }
+
+    // MARK: - Thumbnail (extracted from source)
+
+    private func extractThumbnailFromSource() {
+        guard let url = VideoThumbnailExtractor.resolveURL(source) else { return }
+        extractedSource = source
+
+        // Synchronous cache hit — paint immediately, no flicker.
+        if let cached = VideoThumbnailExtractor.cachedImage(
+            for: url, timeMs: 100, maxSize: 512
+        ) {
+            applyExtractedImage(cached)
+            return
+        }
+
+        let videoAlreadyReady = player?.currentItem?.status == .readyToPlay
+        if !videoAlreadyReady {
+            thumbnailView.alpha = 1
+            thumbnailView.isHidden = false
+        }
+
+        let token = UUID()
+        extractionToken = token
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let image = try? await VideoThumbnailExtractor.extract(
+                source: url, timeMs: 100, maxSize: 512
+            ) else { return }
+            await MainActor.run {
+                guard let self, self.extractionToken == token else { return }
+                self.applyExtractedImage(image)
+            }
+        }
+    }
+
+    private func applyExtractedImage(_ image: UIImage) {
+        // Don't clobber if video already rendered and faded thumb out.
+        if player?.currentItem?.status == .readyToPlay && thumbnailView.isHidden {
+            return
+        }
+        thumbnailView.image = image
     }
 
     // MARK: - Blur intensity

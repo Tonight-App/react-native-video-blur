@@ -11,6 +11,10 @@
     "BlurredVideoView": {
       "swift": "HybridBlurredVideoView",
       "kotlin": "HybridBlurredVideoView"
+    },
+    "VideoThumbnailGenerator": {
+      "swift": "HybridVideoThumbnailGenerator",
+      "kotlin": "HybridVideoThumbnailGenerator"
     }
   },
   "ignorePaths": ["node_modules"]
