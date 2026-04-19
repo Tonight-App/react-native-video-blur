@@ -1,4 +1,4 @@
-package com.blurredvideo
+package com.margelo.nitro.blurredvideo
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

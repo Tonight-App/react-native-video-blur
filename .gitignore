@@ -4,6 +4,7 @@ lib/
 nitrogen/generated/
 .DS_Store
 *.log
+*.tgz
 ios/Pods/
 ios/build/
 android/.gradle/

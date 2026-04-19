@@ -2,7 +2,7 @@ module.exports = {
   dependency: {
     platforms: {
       android: {
-        packageInstance: 'new com.blurredvideo.BlurredVideoPackage()',
+        packageInstance: 'new com.margelo.nitro.blurredvideo.BlurredVideoPackage()',
       },
     },
   },

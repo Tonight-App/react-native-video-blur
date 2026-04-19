@@ -9,12 +9,12 @@
   },
   "autolinking": {
     "BlurredVideoView": {
-      "swift": "HybridBlurredVideoView",
-      "kotlin": "HybridBlurredVideoView"
+      "ios": { "language": "swift", "implementationClassName": "HybridBlurredVideoView" },
+      "android": { "language": "kotlin", "implementationClassName": "HybridBlurredVideoView" }
     },
     "VideoThumbnailGenerator": {
-      "swift": "HybridVideoThumbnailGenerator",
-      "kotlin": "HybridVideoThumbnailGenerator"
+      "ios": { "language": "swift", "implementationClassName": "HybridVideoThumbnailGenerator" },
+      "android": { "language": "kotlin", "implementationClassName": "HybridVideoThumbnailGenerator" }
     }
   },
   "ignorePaths": ["node_modules"]

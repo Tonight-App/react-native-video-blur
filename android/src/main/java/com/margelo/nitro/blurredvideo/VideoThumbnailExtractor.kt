@@ -1,4 +1,4 @@
-package com.blurredvideo
+package com.margelo.nitro.blurredvideo
 
 import android.content.Context
 import android.graphics.Bitmap

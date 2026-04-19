@@ -1,9 +1,8 @@
-package com.blurredvideo
+package com.margelo.nitro.blurredvideo
 
 import android.content.Context
 import com.facebook.proguard.annotations.DoNotStrip
 import com.margelo.nitro.NitroModules
-import com.margelo.nitro.blurredvideo.HybridVideoThumbnailGeneratorSpec
 import com.margelo.nitro.core.Promise
 import kotlin.math.max
 

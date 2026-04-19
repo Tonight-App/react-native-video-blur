@@ -19,7 +19,7 @@
     "!**/.DS_Store"
   ],
   "scripts": {
-    "nitrogen": "nitro-codegen",
+    "nitrogen": "nitrogen",
     "typecheck": "tsc --noEmit",
     "prepare": "bob build"
   },
@@ -37,14 +37,14 @@
   "peerDependencies": {
     "react": "*",
     "react-native": "*",
-    "react-native-nitro-modules": "*"
+    "react-native-nitro-modules": ">=0.35.0"
   },
   "devDependencies": {
-    "nitro-codegen": "^0.25.0",
-    "react-native-nitro-modules": "^0.25.0",
+    "@types/react": "^19.2.0",
+    "nitrogen": "^0.35.4",
     "react-native-builder-bob": "^0.30.0",
-    "typescript": "^5.4.0",
-    "@types/react": "^19.2.0"
+    "react-native-nitro-modules": "^0.35.4",
+    "typescript": "^5.4.0"
   },
   "react-native-builder-bob": {
     "source": "src",

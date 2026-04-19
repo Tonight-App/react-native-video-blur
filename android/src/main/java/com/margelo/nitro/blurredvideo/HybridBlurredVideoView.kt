@@ -1,7 +1,6 @@
-package com.blurredvideo
+package com.margelo.nitro.blurredvideo
 
 import android.content.Context
-import com.facebook.react.uimanager.ThemedReactContext
 import android.graphics.Color
 import android.graphics.RenderEffect
 import android.graphics.Shader
@@ -18,7 +17,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import coil.load
-import com.margelo.nitro.blurredvideo.HybridBlurredVideoViewSpec
+import com.facebook.react.uimanager.ThemedReactContext
 import java.util.UUID
 import java.util.concurrent.Executors
 
