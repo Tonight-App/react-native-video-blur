@@ -47,7 +47,13 @@ import { BlurredVideoView } from 'react-native-blurred-video';
 | `looping`         | `boolean` | Loop video                                |
 | `blurRadius`      | `number`  | Blur radius (Android only; iOS uses system blur) |
 | `thumbnailSource` | `string`  | Poster image shown until first frame      |
+| `enableThumbnail` | `boolean` | Auto-extract a poster frame from `source` when `thumbnailSource` is empty |
+| `showVideo`       | `boolean` | Defaults to `false`. Set `true` to create the player and start playback; set `false` to tear it down and keep only the (blurred) thumbnail. Useful for carousels where only the active cover should play |
 | `rotation`        | `number`  | `0` or `90`                               |
+
+### `showVideo` / carousel pattern
+
+Mount every cover with `showVideo={false}` and flip it to `true` only for the currently visible item. The view will render a blurred thumbnail in the off state (no ExoPlayer / AVPlayer allocated) and spin up a real player the moment you flip it on. This keeps a 20-item carousel from running 20 decoders in parallel.
 
 ## License
 
