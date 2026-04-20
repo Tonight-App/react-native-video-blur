@@ -84,7 +84,10 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     override var paused: Boolean = true
         set(value) {
             field = value
-            if (value) player?.pause() else player?.play()
+            // Declarative: the player auto-plays when it reaches STATE_READY,
+            // and auto-pauses otherwise. Avoids races where explicit play()
+            // is called before the player is prepared.
+            player?.playWhenReady = !value
         }
 
     override var looping: Boolean = false
@@ -116,7 +119,7 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
             }
         }
 
-    override var showVideo: Boolean = true
+    override var showVideo: Boolean = false
         set(value) {
             if (field != value) {
                 field = value
@@ -147,6 +150,10 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     }
 
     private fun unloadVideo() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { unloadVideo() }
+            return
+        }
         player?.release()
         player = null
         textureView?.let { container.removeView(it) }
@@ -154,14 +161,23 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         videoWidth = 0
         videoHeight = 0
         loadedSource = null
+        // Keep whatever bitmap is already on the ImageView — it's the starting
+        // thumbnail (either extracted or provided). We do NOT snapshot the
+        // last video frame: user-facing intent is that the video restarts
+        // from the beginning when this cover becomes active again, and the
+        // thumbnail should match that.
         thumbnailView.alpha = 1f
         thumbnailView.visibility = View.VISIBLE
-        // Re-apply blur to the thumbnail so it stays frosted while the
-        // video is gone — this is our "loading state", matching iOS.
+        // Re-apply blur so the thumbnail stays frosted — this is our
+        // "paused / off-screen" state, matching iOS.
         applyBlurInternal(currentAppliedRadius)
     }
 
     private fun loadVideo() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { loadVideo() }
+            return
+        }
         unloadVideo()
         if (source.isEmpty()) return
         loadedSource = source
@@ -182,13 +198,18 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         if (rotation == 90.0) tv.rotation = 90f
 
         val exo = ExoPlayer.Builder(context).build().apply {
-            setVideoTextureView(tv)
             repeatMode =
                 if (looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
             volume = 0f
+            // Declarative start intent — honoured automatically once the
+            // player reaches STATE_READY. Safe to set before prepare().
+            playWhenReady = !this@HybridBlurredVideoView.paused
             setMediaItem(MediaItem.fromUri(Uri.parse(source)))
-            prepare()
         }
+        // Assign the player reference BEFORE any async attachment work, so
+        // that prop setters (paused, looping, rotation) arriving during
+        // surface-texture setup see a live player instance.
+        player = exo
 
         exo.addListener(object : Player.Listener {
             override fun onRenderedFirstFrame() {
@@ -207,10 +228,14 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
             }
         })
 
-        player = exo
-        applyBlurInternal(currentAppliedRadius)
+        // ExoPlayer handles both "surface ready now" and "surface ready
+        // later" internally — it installs its own SurfaceTextureListener and
+        // picks up the surface whenever it arrives. Calling setVideoTextureView
+        // from inside a foreign listener callback caused racy attach failures.
+        exo.setVideoTextureView(tv)
+        exo.prepare()
 
-        if (!paused) exo.play()
+        applyBlurInternal(currentAppliedRadius)
     }
 
     private fun animateBlurTo(target: Float) {
@@ -327,7 +352,8 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
                 // Set the bitmap unconditionally — even if the thumbnail is
                 // currently hidden behind the video. We want it ready so that
                 // when `showVideo` flips to false (e.g. carousel swipe), the
-                // ImageView already has content to display (blurred).
+                // ImageView already has content to display (blurred) instead
+                // of going black.
                 thumbnailView.setImageBitmap(bmp)
                 applyBlurInternal(currentAppliedRadius)
             }
