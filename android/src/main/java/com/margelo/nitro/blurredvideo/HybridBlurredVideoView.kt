@@ -3,6 +3,7 @@ package com.margelo.nitro.blurredvideo
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.net.Uri
@@ -17,6 +18,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import coil.load
 import com.facebook.react.uimanager.ThemedReactContext
@@ -54,6 +56,16 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
     // Blur animation state
     private var blurAnimator: ValueAnimator? = null
     private var currentAppliedRadius: Float = 7f
+
+    // Video intrinsic size, used to compute cover (center-crop) transform.
+    private var videoWidth: Int = 0
+    private var videoHeight: Int = 0
+
+    // Perceptual scale for RenderEffect blur radius (px). Android's RenderEffect
+    // blur is weaker than iOS CIGaussianBlur at the same nominal value, and the
+    // prop comes in as density-independent. Multiply by density × 2.5 so a prop
+    // of ~7 produces a clearly visible frosted-glass effect.
+    private val blurScale: Float = context.resources.displayMetrics.density * 2.5f
 
     init {
         container.addView(thumbnailView)
@@ -139,9 +151,14 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         player = null
         textureView?.let { container.removeView(it) }
         textureView = null
+        videoWidth = 0
+        videoHeight = 0
         loadedSource = null
         thumbnailView.alpha = 1f
         thumbnailView.visibility = View.VISIBLE
+        // Re-apply blur to the thumbnail so it stays frosted while the
+        // video is gone — this is our "loading state", matching iOS.
+        applyBlurInternal(currentAppliedRadius)
     }
 
     private fun loadVideo() {
@@ -155,6 +172,9 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             isOpaque = false
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                updateTextureTransform()
+            }
         }
         container.addView(tv, 0)
         textureView = tv
@@ -178,6 +198,12 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
                     .setDuration(300)
                     .withEndAction { thumbnailView.visibility = View.GONE }
                     .start()
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoWidth = videoSize.width
+                videoHeight = videoSize.height
+                updateTextureTransform()
             }
         })
 
@@ -216,11 +242,48 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
             return
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val effect = if (radius > 0f) {
-            RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
+        val scaled = radius * blurScale
+        val effect = if (scaled > 0f) {
+            RenderEffect.createBlurEffect(scaled, scaled, Shader.TileMode.CLAMP)
         } else null
-        // Apply once on the container — blurs video + thumbnail together in a single pass.
-        container.setRenderEffect(effect)
+        // Apply to each pixel-bearing child individually. Applying to the
+        // container works in the simple case but occasionally drops the
+        // effect on the remaining ImageView when the TextureView is torn
+        // down (e.g. during carousel swipes that toggle `showVideo`).
+        textureView?.setRenderEffect(effect)
+        thumbnailView.setRenderEffect(effect)
+    }
+
+    // Center-crop (cover) scaling for the TextureView's SurfaceTexture.
+    // TextureView stretches content to view bounds by default; we compute a
+    // matrix that scales the larger axis up so one dimension overflows and
+    // gets clipped by the container (clipChildren = true).
+    private fun updateTextureTransform() {
+        val tv = textureView ?: return
+        val vw = tv.width
+        val vh = tv.height
+        if (vw <= 0 || vh <= 0 || videoWidth <= 0 || videoHeight <= 0) return
+
+        val viewAspect = vw.toFloat() / vh.toFloat()
+        val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
+
+        val sx: Float
+        val sy: Float
+        if (videoAspect > viewAspect) {
+            // Video is wider than view — scale X up so height fills, width overflows.
+            sx = videoAspect / viewAspect
+            sy = 1f
+        } else {
+            // Video is taller than view — scale Y up so width fills, height overflows.
+            sx = 1f
+            sy = viewAspect / videoAspect
+        }
+
+        val matrix = Matrix().apply {
+            setScale(sx, sy, vw / 2f, vh / 2f)
+        }
+        tv.setTransform(matrix)
+        tv.invalidate()
     }
 
     private fun loadRemoteThumbnail() {
@@ -231,6 +294,7 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
             thumbnailView.visibility = View.VISIBLE
         }
         thumbnailView.load(thumbnailSource)
+        applyBlurInternal(currentAppliedRadius)
     }
 
     private fun extractThumbnailFromSource() {
@@ -240,6 +304,7 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
         // Cache hit → paint synchronously, no flicker.
         VideoThumbnailExtractor.cachedBitmap(context, src, 100, 512)?.let {
             thumbnailView.setImageBitmap(it)
+            applyBlurInternal(currentAppliedRadius)
             return
         }
 
@@ -259,8 +324,12 @@ class HybridBlurredVideoView(reactContext: ThemedReactContext) : HybridBlurredVi
             }
             mainHandler.post {
                 if (extractionToken != token) return@post
-                if (thumbnailView.visibility == View.GONE) return@post
+                // Set the bitmap unconditionally — even if the thumbnail is
+                // currently hidden behind the video. We want it ready so that
+                // when `showVideo` flips to false (e.g. carousel swipe), the
+                // ImageView already has content to display (blurred).
                 thumbnailView.setImageBitmap(bmp)
+                applyBlurInternal(currentAppliedRadius)
             }
         }
     }
