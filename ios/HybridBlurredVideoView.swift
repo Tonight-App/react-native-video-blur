@@ -56,7 +56,14 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     var paused: Bool = true {
         didSet { paused ? player?.pause() : player?.play() }
     }
-    var looping: Bool = false
+    var looping: Bool = false {
+        didSet {
+            guard looping != oldValue else { return }
+            // AVPlayer vs AVQueuePlayer+AVPlayerLooper are structurally
+            // different — we can't swap looping on the fly, so rebuild.
+            if loadedSource != nil { loadVideo() }
+        }
+    }
     var blurRadius: Double = 7.0 {
         didSet { applyBlurFraction() }
     }
@@ -231,9 +238,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     // MARK: - Thumbnail (explicit source)
 
     /// Loads a thumbnail from `thumbnailSource`. Accepts any form React Native
-    /// hands us: `https://...` (remote), `file://...` (local file),
-    /// `http://localhost:8081/...` (Metro dev assets), or a bare filesystem
-    /// path. `URLSession` transparently handles http(s) and file schemes.
+
     private func loadThumbnailImage() {
         guard !thumbnailSource.isEmpty else { return }
 
@@ -241,10 +246,16 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
             if let u = URL(string: thumbnailSource), u.scheme != nil {
                 return u
             }
-            // Bare path with no scheme — treat as local file.
             return URL(fileURLWithPath: thumbnailSource)
         }()
         guard let url else { return }
+
+        if url.isFileURL {
+            if let image = UIImage(contentsOfFile: url.path) {
+                thumbnailView.image = image
+            }
+            return
+        }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data, let image = UIImage(data: data) else { return }
