@@ -2,12 +2,12 @@ import UIKit
 import AVFoundation
 import NitroModules
 
-/// Container that keeps the player layer sized to its bounds. UIKit
-/// autoresizes subviews via autoresizingMask, but `AVPlayerLayer` is a
-/// `CALayer` and won't follow bounds changes on its own — so we resize it
-/// here on every layout pass. Without this, the player layer stays at the
-/// (often zero) frame it had the first time `afterUpdate` ran, which is
-/// before Fabric has laid the view out, and the video renders invisibly.
+/// Container that keeps the `AVPlayerLayer` sized to its bounds. UIKit handles
+/// subview autoresizing via autoresizingMask, but a raw `CALayer` won't follow
+/// bounds changes on its own — so we resize it here on every layout pass.
+/// Without this, the player layer stays at the (often zero) frame it had the
+/// first time `afterUpdate` ran, which on newer nitro is before Fabric has
+/// laid the view out, and the video renders invisibly.
 private final class BlurredVideoContainerView: UIView {
     weak var playerLayer: CALayer?
     override func layoutSubviews() {
@@ -32,7 +32,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
     private var looperRef: Any?
-    private var statusObservation: NSKeyValueObservation?
+    private var readyObservation: NSKeyValueObservation?
     private let blurOverlay = UIVisualEffectView(effect: nil)
     private var blurAnimator: UIViewPropertyAnimator?
     private let thumbnailView: UIImageView = {
@@ -46,6 +46,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     private var loadedSource: String?
     private var extractedSource: String?
     private var extractionToken: UUID?
+    private var videoDidRenderFirstFrame = false
 
     // MARK: - Props
 
@@ -60,7 +61,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         didSet { applyBlurFraction() }
     }
     var thumbnailSource: String = "" {
-        didSet { if thumbnailSource != oldValue { loadRemoteThumbnail() } }
+        didSet { if thumbnailSource != oldValue { reconcile() } }
     }
     var enableThumbnail: Bool = false {
         didSet { if enableThumbnail != oldValue { reconcile() } }
@@ -78,6 +79,10 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         containerView.backgroundColor = .black
         thumbnailView.frame = containerView.bounds
         blurOverlay.frame = containerView.bounds
+        // Start with no poster; applyThumbnailVisibility will reveal it
+        // only if the user actually asked for one.
+        thumbnailView.alpha = 0
+        thumbnailView.isHidden = true
         containerView.addSubview(thumbnailView)
         containerView.addSubview(blurOverlay)
         blurOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -92,34 +97,81 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
 
     // MARK: - Reconcile
 
+    /// Whether the user wants any kind of poster image shown while the video
+    /// loads. Purely a function of props — no state, no side effects.
+    private var wantsThumbnail: Bool {
+        return !thumbnailSource.isEmpty || enableThumbnail
+    }
+
     private func reconcile() {
+        // 1. Video lifecycle
         if showVideo {
             if loadedSource != source { loadVideo() }
         } else {
             unloadVideo()
         }
 
-        if enableThumbnail
-            && thumbnailSource.isEmpty
-            && !source.isEmpty
-            && extractedSource != source {
+        // 2. Thumbnail image source
+        if !thumbnailSource.isEmpty {
+            loadThumbnailImage()
+        } else if enableThumbnail && !source.isEmpty && extractedSource != source {
             extractThumbnailFromSource()
+        } else if !wantsThumbnail {
+            thumbnailView.image = nil
+            extractedSource = nil
+        }
+
+        // 3. Thumbnail visibility
+        applyThumbnailVisibility(animated: false)
+    }
+
+    /// Single source of truth for thumbnailView alpha/isHidden. Called on
+    /// every reconcile and whenever the video readiness state changes.
+    ///
+    /// - If the user doesn't want a thumbnail → hidden, no poster.
+    /// - If the user wants one AND the video has rendered → fade it out.
+    /// - Otherwise → visible (alpha=1, not hidden).
+    private func applyThumbnailVisibility(animated: Bool) {
+        guard wantsThumbnail else {
+            thumbnailView.layer.removeAllAnimations()
+            thumbnailView.alpha = 0
+            thumbnailView.isHidden = true
+            return
+        }
+
+        let shouldFadeOut = showVideo && videoDidRenderFirstFrame
+        if shouldFadeOut {
+            guard !thumbnailView.isHidden else { return }
+            if animated {
+                UIView.animate(withDuration: 0.3, delay: 0.05, options: .curveEaseOut) {
+                    self.thumbnailView.alpha = 0
+                } completion: { _ in
+                    self.thumbnailView.isHidden = true
+                }
+            } else {
+                thumbnailView.alpha = 0
+                thumbnailView.isHidden = true
+            }
+        } else {
+            thumbnailView.layer.removeAllAnimations()
+            thumbnailView.isHidden = false
+            thumbnailView.alpha = 1
         }
     }
 
     // MARK: - Video loading
 
     private func unloadVideo() {
-        statusObservation?.invalidate()
-        statusObservation = nil
+        readyObservation?.invalidate()
+        readyObservation = nil
         player?.pause()
         playerLayer?.removeFromSuperlayer()
+        containerView.playerLayer = nil
         player = nil
         playerLayer = nil
         looperRef = nil
         loadedSource = nil
-        thumbnailView.alpha = 1
-        thumbnailView.isHidden = false
+        videoDidRenderFirstFrame = false
     }
 
     private func loadVideo() {
@@ -150,21 +202,24 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
             layer.setAffineTransform(CGAffineTransform(rotationAngle: .pi / 2))
         }
 
-        // Player layer goes below thumbnail + blur overlay so the thumbnail
-        // (and its blur) stay on top until we explicitly fade them out.
+        // Player layer goes below thumbnail + blur overlay so the poster
+        // (and its blur) stay on top until the first frame renders.
         containerView.layer.insertSublayer(layer, at: 0)
         self.playerLayer = layer
         containerView.playerLayer = layer
         containerView.setNeedsLayout()
 
-        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            guard let self, item.status == .readyToPlay else { return }
+        // `isReadyForDisplay` is the correct signal for "a video frame is
+        // actually on screen" — unlike `AVPlayerItem.status == .readyToPlay`,
+        // which only means "playback can begin". Using .initial so we also
+        // handle the case where the layer is already ready at observation
+        // time (cached assets, rapid re-mounts).
+        readyObservation = layer.observe(\.isReadyForDisplay, options: [.new, .initial]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
             DispatchQueue.main.async {
-                UIView.animate(withDuration: 0.3, delay: 0.15, options: .curveEaseOut) {
-                    self.thumbnailView.alpha = 0
-                } completion: { _ in
-                    self.thumbnailView.isHidden = true
-                }
+                guard let self else { return }
+                self.videoDidRenderFirstFrame = true
+                self.applyThumbnailVisibility(animated: true)
             }
         }
 
@@ -173,18 +228,23 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         }
     }
 
-    // MARK: - Thumbnail (remote source)
+    // MARK: - Thumbnail (explicit source)
 
-    private func loadRemoteThumbnail() {
-        guard !thumbnailSource.isEmpty, let url = URL(string: thumbnailSource) else {
-            return
-        }
+    /// Loads a thumbnail from `thumbnailSource`. Accepts any form React Native
+    /// hands us: `https://...` (remote), `file://...` (local file),
+    /// `http://localhost:8081/...` (Metro dev assets), or a bare filesystem
+    /// path. `URLSession` transparently handles http(s) and file schemes.
+    private func loadThumbnailImage() {
+        guard !thumbnailSource.isEmpty else { return }
 
-        let videoAlreadyReady = player?.currentItem?.status == .readyToPlay
-        if !videoAlreadyReady {
-            thumbnailView.alpha = 1
-            thumbnailView.isHidden = false
-        }
+        let url: URL? = {
+            if let u = URL(string: thumbnailSource), u.scheme != nil {
+                return u
+            }
+            // Bare path with no scheme — treat as local file.
+            return URL(fileURLWithPath: thumbnailSource)
+        }()
+        guard let url else { return }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data, let image = UIImage(data: data) else { return }
@@ -204,14 +264,8 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         if let cached = VideoThumbnailExtractor.cachedImage(
             for: url, timeMs: 100, maxSize: 512
         ) {
-            applyExtractedImage(cached)
+            thumbnailView.image = cached
             return
-        }
-
-        let videoAlreadyReady = player?.currentItem?.status == .readyToPlay
-        if !videoAlreadyReady {
-            thumbnailView.alpha = 1
-            thumbnailView.isHidden = false
         }
 
         let token = UUID()
@@ -222,17 +276,14 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
             ) else { return }
             await MainActor.run {
                 guard let self, self.extractionToken == token else { return }
-                self.applyExtractedImage(image)
+                // If the video already rendered and the poster is already
+                // hidden, don't paint over the playing video.
+                if self.videoDidRenderFirstFrame && self.thumbnailView.isHidden {
+                    return
+                }
+                self.thumbnailView.image = image
             }
         }
-    }
-
-    private func applyExtractedImage(_ image: UIImage) {
-        // Don't clobber if video already rendered and faded thumb out.
-        if player?.currentItem?.status == .readyToPlay && thumbnailView.isHidden {
-            return
-        }
-        thumbnailView.image = image
     }
 
     // MARK: - Blur intensity
@@ -261,7 +312,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     deinit {
         blurAnimator?.stopAnimation(true)
         blurAnimator?.finishAnimation(at: .start)
-        statusObservation?.invalidate()
+        readyObservation?.invalidate()
         player?.pause()
         playerLayer?.removeFromSuperlayer()
     }
