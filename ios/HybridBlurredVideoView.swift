@@ -2,11 +2,29 @@ import UIKit
 import AVFoundation
 import NitroModules
 
+/// Container that keeps the player layer sized to its bounds. UIKit
+/// autoresizes subviews via autoresizingMask, but `AVPlayerLayer` is a
+/// `CALayer` and won't follow bounds changes on its own — so we resize it
+/// here on every layout pass. Without this, the player layer stays at the
+/// (often zero) frame it had the first time `afterUpdate` ran, which is
+/// before Fabric has laid the view out, and the video renders invisibly.
+private final class BlurredVideoContainerView: UIView {
+    weak var playerLayer: CALayer?
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let playerLayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = bounds
+        CATransaction.commit()
+    }
+}
+
 class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
 
     // MARK: - View
 
-    private let containerView = UIView()
+    private let containerView = BlurredVideoContainerView()
     var view: UIView { containerView }
 
     // MARK: - Native layers
@@ -21,6 +39,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
+        iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         return iv
     }()
 
@@ -57,6 +76,8 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         super.init()
         containerView.clipsToBounds = true
         containerView.backgroundColor = .black
+        thumbnailView.frame = containerView.bounds
+        blurOverlay.frame = containerView.bounds
         containerView.addSubview(thumbnailView)
         containerView.addSubview(blurOverlay)
         blurOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -66,10 +87,7 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
     func beforeUpdate() {}
 
     func afterUpdate() {
-        let bounds = containerView.bounds
-        playerLayer?.frame = bounds
-        blurOverlay.frame = bounds
-        thumbnailView.frame = bounds
+        containerView.setNeedsLayout()
     }
 
     // MARK: - Reconcile
@@ -136,6 +154,8 @@ class HybridBlurredVideoView: HybridBlurredVideoViewSpec {
         // (and its blur) stay on top until we explicitly fade them out.
         containerView.layer.insertSublayer(layer, at: 0)
         self.playerLayer = layer
+        containerView.playerLayer = layer
+        containerView.setNeedsLayout()
 
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard let self, item.status == .readyToPlay else { return }
