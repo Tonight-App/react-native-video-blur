@@ -32,8 +32,8 @@
     "avplayer",
     "exoplayer"
   ],
-  "repository": "https://github.com/yourname/react-native-blurred-video",
-  "author": "You",
+  "repository": "https://github.com/Tonight-App/react-native-video-blur",
+  "author": "srivastava9",
   "license": "MIT",
   "peerDependencies": {
     "react": "*",
